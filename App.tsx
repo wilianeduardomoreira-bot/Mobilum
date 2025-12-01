@@ -38,7 +38,16 @@ const App: React.FC = () => {
         // 1. Fetch Rooms
         const { data: roomsData } = await supabase.from('rooms').select('*').order('id', { ascending: true });
         if (roomsData && roomsData.length > 0) {
-          setRooms(roomsData);
+          // Map snake_case from DB to camelCase for App
+          const mappedRooms = roomsData.map((r: any) => ({
+            id: r.id,
+            number: r.number,
+            type: r.type,
+            status: r.status,
+            bedType: r.bed_type, // Critical fix for 'toUpperCase' error
+            guestName: r.guest_name
+          }));
+          setRooms(mappedRooms);
         } else {
           // Initialize Default Rooms if DB is empty
           generateDefaultRooms();
@@ -56,11 +65,33 @@ const App: React.FC = () => {
 
         // 4. Fetch Tickets
         const { data: ticketsData } = await supabase.from('maintenance_tickets').select('*');
-        if (ticketsData) setTickets(ticketsData);
+        if (ticketsData) {
+           const mappedTickets = ticketsData.map((t: any) => ({
+             id: t.id,
+             roomNumber: t.room_number,
+             issue: t.issue,
+             priority: t.priority,
+             status: t.status,
+             createdAt: t.created_at,
+             resolvedAt: t.resolved_at
+           }));
+           setTickets(mappedTickets);
+        }
 
         // 5. Fetch Transactions (Recent)
         const { data: transactionsData } = await supabase.from('transactions').select('*').order('date', { ascending: false }).limit(100);
-        if (transactionsData) setTransactions(transactionsData);
+        if (transactionsData) {
+           const mappedTransactions = transactionsData.map((t: any) => ({
+             id: t.id,
+             description: t.description,
+             amount: t.amount,
+             type: t.type,
+             date: t.date,
+             category: t.category,
+             paymentMethod: t.payment_method
+           }));
+           setTransactions(mappedTransactions);
+        }
 
         // 6. Fetch Logs
         const { data: logsData } = await supabase.from('activity_logs').select('*').order('timestamp', { ascending: false }).limit(50);
@@ -147,7 +178,14 @@ const App: React.FC = () => {
     setTransactions(prev => [transaction, ...prev]);
     // Persist to Supabase
     try {
-      await supabase.from('transactions').insert(transaction);
+      await supabase.from('transactions').insert({
+        description: transaction.description,
+        amount: transaction.amount,
+        type: transaction.type,
+        date: transaction.date, // ensure ISO string or compatible format
+        category: transaction.category,
+        payment_method: transaction.paymentMethod
+      });
     } catch(e) { console.error('Error saving transaction to Supabase', e); }
   };
 

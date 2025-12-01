@@ -101,12 +101,35 @@ const SuitesView: React.FC<SuitesViewProps> = ({ employees = [], rooms = [], set
     const loadBookings = async () => {
         if (rooms.length > 0) {
             // Fetch occupied rooms from supabase to populate activeBookings
-            // This is a simplification; ideally we fetch 'bookings' where status=active
             const { data: bookingData } = await supabase.from('bookings').select('*').eq('status', 'active');
             if (bookingData && bookingData.length > 0) {
                 const map: Record<number, BookingData> = {};
                 bookingData.forEach((b: any) => {
-                    map[b.roomId] = b;
+                    const mappedBooking: BookingData = {
+                        roomId: b.room_id,
+                        guestName: b.guest_name,
+                        documentType: b.document_type || 'CPF',
+                        document: b.document || '',
+                        phone: b.phone || '',
+                        email: '', // Not in DB schema
+                        guestsCount: 2, // Not in DB schema
+                        vehicleModel: b.vehicle_model || '',
+                        vehicleColor: b.vehicle_color || '',
+                        vehiclePlate: b.vehicle_plate || '',
+                        checkInDate: b.check_in_date ? new Date(b.check_in_date).toISOString() : '',
+                        checkInTime: b.check_in_time || '',
+                        expectedCheckout: b.expected_checkout ? new Date(b.expected_checkout).toISOString() : '',
+                        dailyRate: b.daily_rate || 0,
+                        initialPayment: 0,
+                        initialPaymentMethod: 'pix',
+                        wakeUpEnabled: b.wake_up_enabled || false,
+                        wakeUpDate: b.wake_up_date || '',
+                        wakeUpCall: b.wake_up_call || '',
+                        notes: b.notes || '',
+                        consumption: b.consumption || [],
+                        payments: b.payments || []
+                    };
+                    map[b.room_id] = mappedBooking;
                 });
                 setActiveBookings(map);
             }
@@ -162,7 +185,7 @@ const SuitesView: React.FC<SuitesViewProps> = ({ employees = [], rooms = [], set
       const now = new Date().toISOString();
       setTickets(prev => prev.map(t => t.id === activeTicket.id ? { ...t, status: 'Concluído', resolvedAt: now } : t));
       // DB Update Ticket
-      await supabase.from('maintenance_tickets').update({ status: 'Concluído', resolvedAt: now }).eq('id', activeTicket.id);
+      await supabase.from('maintenance_tickets').update({ status: 'Concluído', resolved_at: now }).eq('id', activeTicket.id);
     }
 
     setRooms(prev => prev.map(r => r.id === selectedRoom.id ? { ...r, status: RoomStatus.DIRTY } : r));
@@ -191,6 +214,8 @@ const SuitesView: React.FC<SuitesViewProps> = ({ employees = [], rooms = [], set
     stopAlarmSound();
     const booking = activeBookings[selectedRoom.id];
     setActiveBookings(prev => ({ ...prev, [selectedRoom.id]: { ...booking, wakeUpEnabled: false } }));
+    // Persist to DB
+    supabase.from('bookings').update({ wake_up_enabled: false }).eq('room_id', selectedRoom.id).eq('status', 'active').then();
     setRingingRooms(prev => prev.filter(id => id !== selectedRoom.id));
     closeModal();
   };
@@ -218,8 +243,29 @@ const SuitesView: React.FC<SuitesViewProps> = ({ employees = [], rooms = [], set
 
     // DB Insert Booking
     try {
-        await supabase.from('bookings').insert({ ...newBooking, status: 'active', roomId: selectedRoom.id });
-        await supabase.from('rooms').update({ status: RoomStatus.OCCUPIED, guestName: checkInFormData.guestName }).eq('id', selectedRoom.id);
+        const dbPayload = {
+            room_id: selectedRoom.id,
+            guest_name: checkInFormData.guestName,
+            document_type: checkInFormData.documentType,
+            document: checkInFormData.document,
+            phone: checkInFormData.phone,
+            vehicle_model: checkInFormData.vehicleModel,
+            vehicle_color: checkInFormData.vehicleColor,
+            vehicle_plate: checkInFormData.vehiclePlate,
+            check_in_date: new Date(`${checkInFormData.checkInDate}T${checkInFormData.checkInTime}`).toISOString(),
+            check_in_time: checkInFormData.checkInTime,
+            expected_checkout: new Date(checkInFormData.expectedCheckout).toISOString(),
+            daily_rate: checkInFormData.dailyRate,
+            wake_up_enabled: checkInFormData.wakeUpEnabled,
+            wake_up_date: checkInFormData.wakeUpDate,
+            wake_up_call: checkInFormData.wakeUpCall,
+            notes: checkInFormData.notes,
+            status: 'active',
+            consumption: [],
+            payments: newBooking.payments
+        };
+        await supabase.from('bookings').insert(dbPayload);
+        await supabase.from('rooms').update({ status: RoomStatus.OCCUPIED, guest_name: checkInFormData.guestName }).eq('id', selectedRoom.id);
     } catch(e) { console.error(e); }
 
     if (initialAmount > 0 && addTransaction) {
@@ -261,8 +307,7 @@ const SuitesView: React.FC<SuitesViewProps> = ({ employees = [], rooms = [], set
     const updatedBooking = { ...booking, consumption: [...booking.consumption, { id: Date.now().toString(), item: newConsumptionItem.name, unitPrice: unitPrice, quantity: qty, totalPrice: unitPrice * qty, timestamp: new Date() }] };
     setActiveBookings(prev => ({ ...prev, [selectedRoom.id]: updatedBooking }));
     // Update DB if using JSONB for consumption, or insert into related table
-    // For now, assume update on booking row
-    supabase.from('bookings').update({ consumption: updatedBooking.consumption }).eq('roomId', selectedRoom.id).eq('status', 'active').then();
+    supabase.from('bookings').update({ consumption: updatedBooking.consumption }).eq('room_id', selectedRoom.id).eq('status', 'active').then();
     setNewConsumptionItem({ name: '', price: '', quantity: 1 });
   };
 
@@ -276,19 +321,24 @@ const SuitesView: React.FC<SuitesViewProps> = ({ employees = [], rooms = [], set
         addTransaction({ id: Date.now().toString(), description: `Adiantamento - Quarto ${selectedRoom.number} (${booking.guestName})`, amount: amountVal, type: 'income', date: new Date().toLocaleString(), category: 'Hospedagem', paymentMethod: methodVal });
     }
     setActiveBookings(prev => ({ ...prev, [selectedRoom.id]: updatedBooking }));
-    supabase.from('bookings').update({ payments: updatedBooking.payments }).eq('roomId', selectedRoom.id).eq('status', 'active').then();
+    supabase.from('bookings').update({ payments: updatedBooking.payments }).eq('room_id', selectedRoom.id).eq('status', 'active').then();
     setNewPayment({ amount: '', method: 'pix' });
   };
 
   const toggleWakeUpOccupied = () => {
     if (!selectedRoom) return;
     const booking = activeBookings[selectedRoom.id];
-    setActiveBookings(prev => ({ ...prev, [selectedRoom.id]: { ...booking, wakeUpEnabled: !booking.wakeUpEnabled } }));
+    const newState = !booking.wakeUpEnabled;
+    setActiveBookings(prev => ({ ...prev, [selectedRoom.id]: { ...booking, wakeUpEnabled: newState } }));
+    supabase.from('bookings').update({ wake_up_enabled: newState }).eq('room_id', selectedRoom.id).eq('status', 'active').then();
   };
 
   const updateBookingField = (field: keyof BookingData, value: any) => {
     if (!selectedRoom) return;
     setActiveBookings(prev => ({ ...prev, [selectedRoom.id]: { ...prev[selectedRoom.id], [field]: value } }));
+    // Simple mapping for wake up calls to DB columns
+    if(field === 'wakeUpDate') supabase.from('bookings').update({ wake_up_date: value }).eq('room_id', selectedRoom.id).eq('status', 'active').then();
+    if(field === 'wakeUpCall') supabase.from('bookings').update({ wake_up_call: value }).eq('room_id', selectedRoom.id).eq('status', 'active').then();
   };
 
   const handleOpenStatement = () => setShowStatementModal(true);
@@ -310,13 +360,13 @@ const SuitesView: React.FC<SuitesViewProps> = ({ employees = [], rooms = [], set
   const handleFinishCheckout = async () => {
       if (!selectedRoom || !setRooms) return;
       setRooms(prev => prev.map(r => r.id === selectedRoom.id ? { ...r, status: RoomStatus.DIRTY, guestName: undefined } : r));
-      await supabase.from('rooms').update({ status: RoomStatus.DIRTY, guestName: null }).eq('id', selectedRoom.id);
+      await supabase.from('rooms').update({ status: RoomStatus.DIRTY, guest_name: null }).eq('id', selectedRoom.id);
       
       const guestName = activeBookings[selectedRoom.id]?.guestName || 'Desconhecido';
       const total = occupiedTotals().balance + occupiedTotals().paidTotal;
       
       // Archive booking in DB
-      await supabase.from('bookings').update({ status: 'completed', checkoutDate: new Date().toISOString() }).eq('roomId', selectedRoom.id).eq('status', 'active');
+      await supabase.from('bookings').update({ status: 'completed', checkout_date: new Date().toISOString() }).eq('room_id', selectedRoom.id).eq('status', 'active');
 
       if (activeBookings[selectedRoom.id]) {
         const { [selectedRoom.id]: _, ...remaining } = activeBookings;
@@ -329,7 +379,11 @@ const SuitesView: React.FC<SuitesViewProps> = ({ employees = [], rooms = [], set
   const occupiedTotals = () => {
     const booking = getActiveBooking();
     if (!booking) return { days: 0, roomTotal: 0, consumptionTotal: 0, paidTotal: 0, balance: 0 };
-    const start = new Date(booking.checkInDate); const end = new Date(booking.expectedCheckout);
+    const start = new Date(booking.checkInDate); 
+    // Fallback if date is invalid
+    if(isNaN(start.getTime())) return { days: 0, roomTotal: 0, consumptionTotal: 0, paidTotal: 0, balance: 0 };
+    
+    const end = new Date(booking.expectedCheckout);
     const days = Math.ceil(Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) || 1;
     const roomTotal = days * booking.dailyRate;
     const consumptionTotal = booking.consumption.reduce((sum, item) => sum + item.totalPrice, 0);
@@ -351,6 +405,8 @@ const SuitesView: React.FC<SuitesViewProps> = ({ employees = [], rooms = [], set
   };
 
   const renderBedIcon = (type: string, isOccupied: boolean) => {
+    // Safety check if type is undefined
+    if (!type) return null;
     const colorClass = isOccupied ? 'text-slate-300' : 'text-slate-400 dark:text-slate-500';
     const iconSizeClass = "w-3 h-3 md:w-4 md:h-4";
     if (type === 'casal') return <BedDouble className={`${iconSizeClass} ${colorClass}`} />; 
@@ -406,7 +462,6 @@ const SuitesView: React.FC<SuitesViewProps> = ({ employees = [], rooms = [], set
               <div className="p-6 text-center"><p className="text-gray-600 dark:text-slate-300 mb-6">O despertador programado para o hóspede <span className="font-bold text-gray-900 dark:text-white">{selectedRoom.guestName}</span> está tocando.</p><div className="grid grid-cols-2 gap-4"><button onClick={snoozeAlarm} className="py-3 px-4 bg-gray-100 dark:bg-slate-800 text-gray-700 dark:text-slate-200 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-200 dark:hover:bg-slate-700"><Clock size={20} /> Soneca (10m)</button><button onClick={dismissAlarm} className="py-3 px-4 bg-red-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-red-600 shadow-lg shadow-red-200 dark:shadow-none"><Bell size={20} className="line-through" /> Desligar</button></div></div>
             </div>
           )}
-          {/* ... (Clean, Maintenance, Check-in, Occupied, Statement, Checkout modals - Reusing existing structure but actions are now async) ... */}
           {/* Maintenance Modal */}
           {showMaintenanceModal && (
             <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200 ring-4 ring-red-100 dark:ring-red-900/20 m-4 border border-red-200 dark:border-red-900/50">
@@ -424,7 +479,7 @@ const SuitesView: React.FC<SuitesViewProps> = ({ employees = [], rooms = [], set
           {/* Check In Modal */}
           {selectedRoom.status === RoomStatus.AVAILABLE && !showAlarmModal && !showCleanModal && !showMaintenanceModal && (
              <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200 border border-transparent dark:border-slate-800">
-               <div className="px-6 py-4 border-b border-gray-100 dark:border-slate-800 flex justify-between items-center bg-gray-50/50 dark:bg-slate-800/50"><div className="flex items-center gap-3"><div className="w-10 h-10 bg-slate-800 dark:bg-slate-700 rounded-xl flex items-center justify-center shadow-gray-300 dark:shadow-none shadow-lg text-white font-bold text-lg">{selectedRoom.number}</div><div><h3 className="text-lg font-bold text-gray-900 dark:text-white">Novo Check-in</h3><p className="text-xs text-gray-500 dark:text-slate-400">Suíte {selectedRoom.type} • {selectedRoom.bedType.toUpperCase()}</p></div></div><button onClick={closeModal} className="p-2 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-full transition-colors text-gray-500 dark:text-slate-400"><X size={20} /></button></div>
+               <div className="px-6 py-4 border-b border-gray-100 dark:border-slate-800 flex justify-between items-center bg-gray-50/50 dark:bg-slate-800/50"><div className="flex items-center gap-3"><div className="w-10 h-10 bg-slate-800 dark:bg-slate-700 rounded-xl flex items-center justify-center shadow-gray-300 dark:shadow-none shadow-lg text-white font-bold text-lg">{selectedRoom.number}</div><div><h3 className="text-lg font-bold text-gray-900 dark:text-white">Novo Check-in</h3><p className="text-xs text-gray-500 dark:text-slate-400">Suíte {selectedRoom.type} • {selectedRoom.bedType?.toUpperCase()}</p></div></div><button onClick={closeModal} className="p-2 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-full transition-colors text-gray-500 dark:text-slate-400"><X size={20} /></button></div>
                <div className="flex-1 overflow-y-auto p-4 md:p-6 bg-white dark:bg-slate-900">
                  <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
                    <div className="md:col-span-8 space-y-6">
