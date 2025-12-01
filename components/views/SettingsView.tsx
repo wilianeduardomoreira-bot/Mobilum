@@ -1,7 +1,8 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Tag, Users, Shield, Bed, Package, Edit, Trash2, Eye, EyeOff, Save, CheckCircle2, Plus, Clock, DollarSign, BedDouble, X, Search, Barcode, AlertTriangle } from 'lucide-react';
 import { Employee, Role, ActivityType, Product } from '../../types';
+import { supabase } from '../../services/supabaseClient';
 
 interface RoomConfig {
   id: string;
@@ -28,14 +29,27 @@ const SettingsView: React.FC<SettingsViewProps> = ({ employees, setEmployees, pr
   const [searchTerm, setSearchTerm] = useState('');
 
   // --- STATE FOR ROOM CONFIGURATION ---
-  const [roomConfigs, setRoomConfigs] = useState<RoomConfig[]>([
-    { id: '1', category: 'Standard', bedType: 'Casal', price4h: 90, price12h: 160, price24h: 250 },
-    { id: '2', category: 'Standard', bedType: 'Duplo', price4h: 90, price12h: 160, price24h: 250 },
-    { id: '3', category: 'Luxo', bedType: 'Casal', price4h: 150, price12h: 280, price24h: 400 },
-    { id: '4', category: 'Luxo', bedType: 'Triplo', price4h: 150, price12h: 280, price24h: 400 },
-    { id: '5', category: 'Master', bedType: 'Casal', price4h: 300, price12h: 550, price24h: 750 },
-  ]);
+  const [roomConfigs, setRoomConfigs] = useState<RoomConfig[]>([]);
   const [editingRoomConfig, setEditingRoomConfig] = useState<RoomConfig | null>(null);
+
+  // Load Room Configs from Supabase
+  useEffect(() => {
+    const loadConfigs = async () => {
+        const { data } = await supabase.from('room_configs').select('*');
+        if (data) {
+            const mapped = data.map((c: any) => ({
+                id: c.id,
+                category: c.category,
+                bedType: c.bed_type,
+                price4h: c.price_4h,
+                price12h: c.price_12h,
+                price24h: c.price_24h
+            }));
+            setRoomConfigs(mapped);
+        }
+    };
+    if (activeTab === 'quartos' || activeTab === 'valores') loadConfigs();
+  }, [activeTab]);
 
   // Form State
   const initialFormState: Omit<Employee, 'id'> = {
@@ -94,11 +108,17 @@ const SettingsView: React.FC<SettingsViewProps> = ({ employees, setEmployees, pr
     if (activeTab === 'equipe') setActiveTab('acesso');
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (window.confirm('Tem certeza que deseja remover este funcionário?')) {
         const emp = employees.find(e => e.id === id);
+        
+        // Optimistic UI
         setEmployees(prev => prev.filter(e => e.id !== id));
         if (editingId === id) handleResetForm();
+        
+        // Supabase
+        await supabase.from('employees').delete().eq('id', id);
+
         if(addLog) addLog('ACCESS', 'REMOCAO_FUNCIONARIO', `Funcionário ${emp?.name} removido do sistema.`);
     }
   };
@@ -109,61 +129,101 @@ const SettingsView: React.FC<SettingsViewProps> = ({ employees, setEmployees, pr
     setShowPassword(false);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!formData.name || !formData.username) return alert('Nome e Usuário são obrigatórios');
 
     if (editingId) {
-        // Update
+        // Update Local
         setEmployees(prev => prev.map(e => e.id === editingId ? { ...formData, id: editingId } : e));
+        
+        // Update DB
+        await supabase.from('employees').update({
+            name: formData.name, email: formData.email, phone: formData.phone, 
+            username: formData.username, password: formData.password, 
+            role: formData.role, permissions: formData.permissions
+        }).eq('id', editingId);
+
         if(addLog) addLog('ACCESS', 'ATUALIZACAO_FUNCIONARIO', `Dados do funcionário ${formData.name} atualizados.`);
     } else {
-        // Create
-        setEmployees(prev => [...prev, { ...formData, id: Date.now().toString() }]);
+        // Create DB
+        const { data } = await supabase.from('employees').insert({
+            name: formData.name, email: formData.email, phone: formData.phone, 
+            username: formData.username, password: formData.password, 
+            role: formData.role, permissions: formData.permissions
+        }).select();
+
+        if (data) {
+            setEmployees(prev => [...prev, data[0] as Employee]);
+        }
+        
         if(addLog) addLog('ACCESS', 'NOVO_FUNCIONARIO', `Novo funcionário cadastrado: ${formData.name} (${formData.role}).`);
     }
     handleResetForm();
   };
 
   // --- PRODUCT HANDLERS ---
-  const handleSaveProduct = () => {
+  const handleSaveProduct = async () => {
     if (!editingProduct || !setProducts) return;
     if (!editingProduct.name || !editingProduct.price) return alert("Nome e Preço são obrigatórios.");
 
     if (editingProduct.id === 'new') {
-       const newProd = { ...editingProduct, id: Date.now().toString() };
-       setProducts(prev => [...prev, newProd]);
-       if(addLog) addLog('SYSTEM', 'NOVO_PRODUTO', `Produto adicionado: ${newProd.name} (${newProd.code})`);
+       const { id, ...newProd } = editingProduct; 
+       // DB Insert
+       const { data } = await supabase.from('products').insert(newProd).select();
+       
+       if (data) {
+           setProducts(prev => [...prev, data[0] as Product]);
+           if(addLog) addLog('SYSTEM', 'NOVO_PRODUTO', `Produto adicionado: ${data[0].name} (${data[0].code})`);
+       }
     } else {
+       // DB Update
+       await supabase.from('products').update(editingProduct).eq('id', editingProduct.id);
        setProducts(prev => prev.map(p => p.id === editingProduct.id ? editingProduct : p));
        if(addLog) addLog('SYSTEM', 'ATUALIZACAO_PRODUTO', `Produto atualizado: ${editingProduct.name}`);
     }
     setEditingProduct(null);
   };
 
-  const handleDeleteProduct = (id: string) => {
+  const handleDeleteProduct = async (id: string) => {
      if(window.confirm("Deseja excluir este produto do catálogo?") && setProducts) {
         const prod = products.find(p => p.id === id);
         setProducts(prev => prev.filter(p => p.id !== id));
+        await supabase.from('products').delete().eq('id', id);
         if(addLog) addLog('SYSTEM', 'REMOCAO_PRODUTO', `Produto removido: ${prod?.name}`);
      }
   };
 
   // --- ROOM CONFIG HANDLERS ---
-  const handleSaveRoomConfig = () => {
+  const handleSaveRoomConfig = async () => {
     if (!editingRoomConfig) return;
+    
+    const dbPayload = {
+        category: editingRoomConfig.category,
+        bed_type: editingRoomConfig.bedType,
+        price_4h: editingRoomConfig.price4h,
+        price_12h: editingRoomConfig.price12h,
+        price_24h: editingRoomConfig.price24h
+    };
+
     if (editingRoomConfig.id === 'new') {
-        setRoomConfigs(prev => [...prev, { ...editingRoomConfig, id: Date.now().toString() }]);
-        if(addLog) addLog('SYSTEM', 'NOVA_CONFIG_QUARTO', `Nova configuração criada: ${editingRoomConfig.category} - ${editingRoomConfig.bedType}`);
+        const { data } = await supabase.from('room_configs').insert(dbPayload).select();
+        if (data) {
+            const newConfig = { ...editingRoomConfig, id: data[0].id };
+            setRoomConfigs(prev => [...prev, newConfig]);
+            if(addLog) addLog('SYSTEM', 'NOVA_CONFIG_QUARTO', `Nova configuração criada: ${newConfig.category} - ${newConfig.bedType}`);
+        }
     } else {
+        await supabase.from('room_configs').update(dbPayload).eq('id', editingRoomConfig.id);
         setRoomConfigs(prev => prev.map(c => c.id === editingRoomConfig.id ? editingRoomConfig : c));
         if(addLog) addLog('SYSTEM', 'ATUALIZACAO_CONFIG_QUARTO', `Configuração atualizada: ${editingRoomConfig.category} - ${editingRoomConfig.bedType}`);
     }
     setEditingRoomConfig(null);
   };
 
-  const handleDeleteRoomConfig = (id: string) => {
+  const handleDeleteRoomConfig = async (id: string) => {
     if (window.confirm('Excluir esta configuração de quarto?')) {
         setRoomConfigs(prev => prev.filter(c => c.id !== id));
+        await supabase.from('room_configs').delete().eq('id', id);
         setEditingRoomConfig(null);
         if(addLog) addLog('SYSTEM', 'REMOCAO_CONFIG_QUARTO', `Configuração de quarto removida.`);
     }
@@ -177,20 +237,22 @@ const SettingsView: React.FC<SettingsViewProps> = ({ employees, setEmployees, pr
              {/* ... Value Table ... */}
             <div className="flex justify-between items-center">
                 <h3 className="font-semibold text-lg text-gray-800 dark:text-white">Tabela de Valores por Período</h3>
-                <button className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"><Edit size={16} /> Editar Tabela</button>
+                {/* Note: This table is currently static for display purposes in the prototype, but reflects the room configs below */}
             </div>
              <div className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-xl overflow-hidden overflow-x-auto">
                <table className="w-full text-left text-sm min-w-[500px]">
-                 <thead className="bg-gray-50 dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700"><tr><th className="p-4 font-medium">Duração</th><th className="p-4 font-medium">Standard</th><th className="p-4 font-medium">Luxo</th><th className="p-4 font-medium">Master</th></tr></thead>
+                 <thead className="bg-gray-50 dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700"><tr><th className="p-4 font-medium">Categoria</th><th className="p-4 font-medium">Tipo Cama</th><th className="p-4 font-medium">4 Horas</th><th className="p-4 font-medium">12 Horas</th><th className="p-4 font-medium">24 Horas</th></tr></thead>
                  <tbody className="divide-y divide-gray-100 dark:divide-slate-800">
-                   <tr className="bg-gray-50/50 dark:bg-slate-800/30"><td colSpan={4} className="p-3 text-xs font-bold uppercase tracking-wider pl-4">Baixa Temporada</td></tr>
-                   <tr><td className="p-4 font-medium">4 horas</td><td className="p-4">R$ 90,00</td><td className="p-4">R$ 150,00</td><td className="p-4">R$ 300,00</td></tr>
-                   <tr><td className="p-4 font-medium">Pernoite (12h)</td><td className="p-4">R$ 160,00</td><td className="p-4">R$ 280,00</td><td className="p-4">R$ 550,00</td></tr>
-                   <tr><td className="p-4 font-medium">Diária (24h)</td><td className="p-4">R$ 250,00</td><td className="p-4">R$ 400,00</td><td className="p-4">R$ 750,00</td></tr>
-                   <tr className="bg-gray-50/50 dark:bg-slate-800/30"><td colSpan={4} className="p-3 text-xs font-bold uppercase tracking-wider pl-4">Alta Temporada</td></tr>
-                   <tr><td className="p-4 font-medium">4 horas</td><td className="p-4">R$ 110,00</td><td className="p-4">R$ 180,00</td><td className="p-4">R$ 350,00</td></tr>
-                   <tr><td className="p-4 font-medium">Pernoite (12h)</td><td className="p-4">R$ 200,00</td><td className="p-4">R$ 350,00</td><td className="p-4">R$ 650,00</td></tr>
-                   <tr><td className="p-4 font-medium">Diária (24h)</td><td className="p-4">R$ 320,00</td><td className="p-4">R$ 500,00</td><td className="p-4">R$ 900,00</td></tr>
+                   {roomConfigs.map(conf => (
+                       <tr key={conf.id}>
+                           <td className="p-4">{conf.category}</td>
+                           <td className="p-4">{conf.bedType}</td>
+                           <td className="p-4">R$ {conf.price4h.toFixed(2)}</td>
+                           <td className="p-4">R$ {conf.price12h.toFixed(2)}</td>
+                           <td className="p-4">R$ {conf.price24h.toFixed(2)}</td>
+                       </tr>
+                   ))}
+                   {roomConfigs.length === 0 && <tr><td colSpan={5} className="p-4 text-center text-gray-500">Nenhuma configuração encontrada.</td></tr>}
                  </tbody>
                </table>
             </div>
@@ -238,7 +300,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ employees, setEmployees, pr
                         </tr>
                      </thead>
                      <tbody className="divide-y divide-gray-100 dark:divide-slate-800">
-                        {products.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()) || p.code.includes(searchTerm)).map(prod => (
+                        {products.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()) || (p.code && p.code.includes(searchTerm))).map(prod => (
                            <tr key={prod.id} className="hover:bg-gray-50 dark:hover:bg-slate-800/50 transition-colors">
                               <td className="p-4 text-gray-500 dark:text-slate-400 font-mono text-xs">{prod.code || '-'}</td>
                               <td className="p-4 font-medium text-gray-900 dark:text-white">{prod.name}</td>
