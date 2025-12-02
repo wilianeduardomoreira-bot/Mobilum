@@ -8,7 +8,6 @@ import {
   Wrench, 
   Wallet, 
   MessageSquare, 
-  Bot, 
   Settings,
   LogOut,
   X,
@@ -60,7 +59,6 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const footerItems = [
     { id: View.CHAT, icon: MessageSquare, label: 'Chat Interno' },
-    { id: View.AI_ASSISTANT, icon: Bot, label: 'Assistente IA' },
     { id: View.SETTINGS, icon: Settings, label: 'Configurações' },
   ];
 

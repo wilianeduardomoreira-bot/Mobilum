@@ -9,7 +9,6 @@ import ReportsView from './components/views/ReportsView';
 import MaintenanceView from './components/views/MaintenanceView';
 import CashierView from './components/views/CashierView';
 import ChatView from './components/views/ChatView';
-import AIAssistantView from './components/views/AIAssistantView';
 import SettingsView from './components/views/SettingsView';
 import LoginView from './components/views/LoginView';
 import { Menu } from 'lucide-react';
@@ -17,7 +16,16 @@ import { supabase } from './services/supabaseClient';
 
 const App: React.FC = () => {
   // --- AUTH STATE ---
-  const [currentUser, setCurrentUser] = useState<Employee | null>(null);
+  // BYPASS LOGIN: Initialized with Admin User
+  const [currentUser, setCurrentUser] = useState<Employee | null>({
+      id: '0',
+      name: 'Administrador Master',
+      username: 'admin',
+      email: 'admin@hotelrudge.com.br',
+      phone: '',
+      role: 'Administrador Master',
+      permissions: { suites: true, dashboard: true, calendar: true, reports: true, maintenance: true, cashier: true, chat: true, settings: true }
+  });
 
   const [currentView, setCurrentView] = useState<View>(View.SUITES);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -243,8 +251,9 @@ const App: React.FC = () => {
     if (currentUser) {
       addLog('SYSTEM', 'LOGOUT_REALIZADO', `Usuário ${currentUser.username} realizou logout.`, currentUser.name);
     }
-    setCurrentUser(null);
-    setCurrentView(View.SUITES);
+    // Optional: Keep user logged in for this demo, or actually log out:
+    // setCurrentUser(null);
+    alert("Logout simulado. Para bloquear o acesso, recarregue a página (modo demonstração).");
   };
 
   if (!currentUser) {
@@ -262,7 +271,6 @@ const App: React.FC = () => {
       case View.CASHIER: 
         return <CashierView employees={employees} isShiftOpen={isShiftOpen} shiftData={shiftData} onOpenShift={handleOpenShift} onCloseShift={handleCloseShift} addLog={addLog} transactions={transactions} addTransaction={addTransaction} />;
       case View.CHAT: return <ChatView />;
-      case View.AI_ASSISTANT: return <AIAssistantView rooms={rooms} tickets={tickets} />;
       case View.SETTINGS: return <SettingsView employees={employees} setEmployees={setEmployees} products={products} setProducts={setProducts} addLog={addLog} />;
       default: return <SuitesView employees={employees} rooms={rooms} setRooms={setRooms} tickets={tickets} setTickets={setTickets} products={products} addLog={addLog} />;
     }

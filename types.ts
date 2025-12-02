@@ -8,7 +8,6 @@ export enum View {
   MAINTENANCE = 'Manutenção',
   CASHIER = 'Caixa',
   CHAT = 'Chat Interno',
-  AI_ASSISTANT = 'Assistente IA',
   SETTINGS = 'Configurações',
 }
 
